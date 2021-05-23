@@ -15,9 +15,9 @@ C
 C
       DIMENSION EELAS(6),EPLAS(6),FLOW(6)
       PARAMETER (ONE=1.0D0,TWO=2.0D0,THREE=3.0D0,SIX=6.0D0)
-      DATA NEWTON,TOLER/10,1.D-6/
+      DATA NEWTON,TOLER,damage/10,1.D-6,0/
 C
-C -----------------------------------------------------------
+C ---------------------------------------------------------
 C     UMAT FOR ISOTROPIC ELASTICITY AND ISOTROPIC PLASTICITY
 C     J2 FLOW THEORY
 C     CAN NOT BE USED FOR PLANE STRESS
@@ -55,12 +55,12 @@ C
 C
       DO 40 K1=1,NDI
         DO 30 K2=1,NDI
-           DDSDDE(K2,K1)=ELAM
+           DDSDDE(K2,K1)=(ONE-damage)*ELAM
  30     CONTINUE
-        DDSDDE(K1,K1)=EG2+ELAM
+        DDSDDE(K1,K1)=(ONE-damage)*EG2+ELAM
  40   CONTINUE
       DO 50 K1=NDI+1,NTENS
-        DDSDDE(K1,K1)=EG
+        DDSDDE(K1,K1)=(ONE-damage)*EG
  50   CONTINUE
 C
 C    CALCULATE STRESS FROM ELASTIC STRAINS
@@ -78,6 +78,11 @@ C
          EPLAS(K1)=STATEV(K1+NTENS)
  80   CONTINUE
       EQPLAS=STATEV(1+2*NTENS)
+C MY PLAYGROUND
+c      write(*,*) STATEV(14)
+      damage = STATEV(14) 
+      DI = STATEV(15)
+C MY PLAYGROUND
 C
 C    IF NO YIELD STRESS IS GIVEN, MATERIAL IS TAKEN TO BE ELASTIC
 C
@@ -96,7 +101,7 @@ C
 C       HARDENING CURVE, GET YIELD STRESS
 C
         NVALUE=NPROPS/2-1
-        CALL AHARD(SYIEL0,HARD,EQPLAS,PROPS(3),NVALUE)
+        CALL AHARD(SYIEL0,HARD,EQPLAS,PROPS(3),NVALUE,damage)
 C
 C       DETERMINE IF ACTIVELY YIELDING
 C
@@ -118,9 +123,9 @@ C
           SYIELD=SYIEL0
           DEQPL=0.0
           DO 130 KEWTON=1,NEWTON
-             RHS=SMISES-EG3*DEQPL-SYIELD
-             DEQPL=DEQPL+RHS/(EG3+HARD)
-             CALL AHARD(SYIELD,HARD,EQPLAS+DEQPL,PROPS(3),NVALUE)
+             RHS=SMISES-(ONE-damage)*EG3*DEQPL-(ONE-damage)*SYIELD
+             DEQPL=DEQPL+RHS/((EG3+HARD)*(ONE+damage))
+             CALL AHARD(SYIELD,HARD,EQPLAS+DEQPL,PROPS(3),NVALUE,damage)
              IF(ABS(RHS).LT.TOLER*SYIEL0) GOTO 140
  130      CONTINUE
           WRITE(6,2) NEWTON
@@ -132,12 +137,12 @@ C
 C       CALC STRESS AND UPDATE STRAINS
 C
           DO 150 K1=1,NDI
-             STRESS(K1)=FLOW(K1)*SYIELD+SHYDRO
+             STRESS(K1)=FLOW(K1)*(ONE-damage)*SYIELD+SHYDRO
              EPLAS(K1)=EPLAS(K1)+THREE*FLOW(K1)*DEQPL/TWO
              EELAS(K1)=EELAS(K1)-THREE*FLOW(K1)*DEQPL/TWO
  150      CONTINUE
           DO 160 K1=NDI+1,NTENS
-             STRESS(K1)=FLOW(K1)*SYIELD
+             STRESS(K1)=FLOW(K1)*(ONE-damage)*SYIELD
              EPLAS(K1)=EPLAS(K1)+THREE*FLOW(K1)*DEQPL
              EELAS(K1)=EELAS(K1)-THREE*FLOW(K1)*DEQPL
  160      CONTINUE
@@ -152,17 +157,17 @@ C
           EFFLAM=(EBULK3-EFFG2)/THREE
           DO 220 K1=1,NDI
              DO 210 K2=1,NDI
-                DDSDDE(K2,K1)=EFFLAM
+                DDSDDE(K2,K1)=(EFFLAM)
  210         CONTINUE
-             DDSDDE(K1,K1)=EFFG2+EFFLAM
+             DDSDDE(K1,K1)=(EFFG2+EFFLAM)
  220      CONTINUE
           DO 230 K1=NDI+1,NTENS
              DDSDDE(K1,K1)=EFFG
  230      CONTINUE
           DO 250 K1=1,NTENS
              DO 240 K2=1,NTENS
-                DDSDDE(K2,K1)=DDSDDE(K2,K1)+FLOW(K2)*FLOW(K1)
-     1                                       *(EFFHRD-EFFG3)
+                DDSDDE(K2,K1) = (ONE-damage)*(DDSDDE(K2,K1)+FLOW(K2)
+     1                                   *FLOW(K1)*(EFFHRD-EFFG3))
  240         CONTINUE
  250      CONTINUE
         ENDIF
@@ -175,12 +180,30 @@ C
         STATEV(K1+NTENS)=EPLAS(K1)
  310  CONTINUE
       STATEV(1+2*NTENS)=EQPLAS
-C
+c MY PLAYGROUND
+      IF (KINC.GT.28) THEN
+            STATEV(14)= damage + 1.D-1
+      ENDIF
+C     4th order runge kutta
+      DDTIME = DTIME/10.D-0
+      IF (KINC.GT.30) THEN
+      DO 15 I=1, 1
+      CALL G(DI,K1)
+      CALL G(DI+K1*DDTIME/TWO, K2)
+      CALL G(DI+K2*DDTIME/TWO, K3)
+      CALL G(DI+K3*DDTIME/TWO, K4)
+      DI = DI + (ONE/6.)*(K1+TWO*K2+TWO*K3+K4)
+c      write(*,*) 'İNCREMENT NUMBER : ', KINC
+c      write(*,*) 'DAMAGE (DI) : ', DI,I
+  15  CONTINUE  
+      STATEV(15) = DI
+      ENDIF
+C MY PLAYGROUND
       RETURN
       END
 C
 C
-      SUBROUTINE AHARD(SYIELD,HARD,EQPLAS,TABLE,NVALUE)
+      SUBROUTINE AHARD(SYIELD,HARD,EQPLAS,TABLE,NVALUE,damage)
 C
       INCLUDE 'ABA_PARAM.INC'
       DIMENSION TABLE(2,NVALUE)
@@ -209,7 +232,7 @@ C
             SYIEL0=TABLE(1,K1)
             SYIEL1=TABLE(1,K1+1)
             DSYIEL=SYIEL1-SYIEL0
-            HARD=DSYIEL/DEQPL
+            HARD=(1.d-0-damage)*DSYIEL/DEQPL
             SYIELD=SYIEL0+(EQPLAS-EQPL0)*HARD
             GOTO 20
             ENDIF
@@ -218,3 +241,14 @@ C
       ENDIF
       RETURN
       END
+C
+C
+C MY PLAYGROUND
+      SUBROUTINE G(DI,K)
+C
+      INCLUDE 'ABA_PARAM.INC'
+C      
+      K = DI + 1
+      RETURN
+      END
+C MY PLAYGROUND
